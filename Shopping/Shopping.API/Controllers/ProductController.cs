@@ -5,7 +5,7 @@ using Shopping.API.Models;
 
 namespace Shopping.API.Controllers
 {
-    [Route("api/[controller]")]
+    [Route("[controller]")]
     [ApiController]
     public class ProductController : ControllerBase
     {

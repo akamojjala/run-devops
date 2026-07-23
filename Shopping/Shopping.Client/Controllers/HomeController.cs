@@ -1,22 +1,25 @@
 using Microsoft.AspNetCore.Mvc;
-using Shopping.Client.Data;
 using Shopping.Client.Models;
+using Shopping.Client.Services;
 using System.Diagnostics;
 
 namespace Shopping.Client.Controllers
 {
     public class HomeController : Controller
     {
+        
         private readonly ILogger<HomeController> _logger;
+        private readonly IShoppingClient _shoppingClient;
 
-        public HomeController(ILogger<HomeController> logger)
+        public HomeController(ILogger<HomeController> logger, IShoppingClient shoppingClient)
         {
             _logger = logger;
+            _shoppingClient = shoppingClient;
         }
 
-        public IActionResult Index()
+        public async Task<IActionResult> Index()
         {
-            return View(ProductContext.Products);
+            return View(await _shoppingClient.GetProducts());
         }
 
         public IActionResult Privacy()

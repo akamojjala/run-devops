@@ -1,10 +1,27 @@
-﻿using Shopping.API.Models;
+﻿using MongoDB.Driver;
+using Shopping.API.Models;
 
 namespace Shopping.API.Data
 {
-    public static class ProductContext
+    public class ProductContext
     {
-        public static readonly List<Product> Products = new List<Product>
+        public ProductContext(IConfiguration configuration)
+        {
+            var client = new MongoClient(configuration["DatabaseSettings:ConnectionString"]);
+            var database = client.GetDatabase(configuration["DatabaseSettings:DatabaseName"]);
+            Products = database.GetCollection<Product>(configuration["DatabaseSettings:CollectionName"]);
+            Console.WriteLine($"Conn: {configuration["DatabaseSettings:ConnectionString"]}, DB: {configuration["DatabaseSettings:DatabaseName"]}, Coll: {configuration["DatabaseSettings:CollectionName"]}");
+            SeedData(Products);
+        }
+        public IMongoCollection<Product> Products { get; }
+        private void SeedData(IMongoCollection<Product> products)
+        {
+            bool productsExist = products.Find(p => true).Any();
+            if (!productsExist)
+                products.InsertManyAsync(PreConfiguredProducts);
+        }
+
+        public static readonly List<Product> PreConfiguredProducts = new List<Product>
         {
             new Product(){
                 Name="Iphone X",

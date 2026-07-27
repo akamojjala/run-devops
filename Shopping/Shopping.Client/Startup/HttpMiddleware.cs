@@ -1,14 +1,12 @@
-﻿using System.Runtime.CompilerServices;
-
-namespace Shopping.Client.Startup
+﻿namespace Shopping.Client.Startup
 {
     public static class HttpMiddleware
     {
-        public static IServiceCollection AddHttpMiddleware(this IServiceCollection services)
+        public static IServiceCollection AddHttpMiddleware(this IServiceCollection services, IConfiguration configuration)
         {
             services.AddHttpClient("ShoppingAPIClient", client =>
             {
-                client.BaseAddress = new Uri("http://localhost:5022");
+                client.BaseAddress = new Uri(configuration["APIConfig:BaseAddress"]);
             });
             return services;
         }

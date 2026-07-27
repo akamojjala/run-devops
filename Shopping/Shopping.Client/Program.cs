@@ -4,7 +4,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllersWithViews();
-builder.Services.AddHttpMiddleware();
+builder.Services.AddHttpMiddleware(builder.Configuration);
 builder.Services.ConfigureInversionOfControl();
 var app = builder.Build();
 

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shoppingclient-depl
+  labels:
+    app: shoppingclient
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shoppingclient
+  template:
+    metadata:
+      labels:
+        app: shoppingclient
+    spec:
+      containers:
+        - name: shoppingclient
+          image: akamojjala/shoppingclient:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: shoppingclient-config
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "250m"
+            limits:
+              memory: "128Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shoppingclient-service
+spec:
+  selector:
+    app: shoppingclient
+  ports:
+    - protocol: TCP
+      port: 8002
+      targetPort: 8002
+      nodePort: 30002
+  type: LoadBalancer

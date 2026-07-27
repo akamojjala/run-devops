@@ -1,0 +1,38 @@
+services:
+  shopping.api:
+    container_name: shoppingapi
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_HTTP_PORTS=8000
+      - ASPNETCORE_HTTPS_PORTS=8001
+      - DatabaseSettings:ConnectionString=mongodb://shoppingdb:27017
+    depends_on:
+      - shopping.db
+    ports:
+      - "8000:8000"
+      - "8001:8001"
+    volumes:
+      - ${APPDATA}/Microsoft/UserSecrets:/home/app/.microsoft/usersecrets:ro
+      - ${APPDATA}/Microsoft/UserSecrets:/root/.microsoft/usersecrets:ro
+      - ${APPDATA}/ASP.NET/Https:/home/app/.aspnet/https:ro
+      - ${APPDATA}/ASP.NET/Https:/root/.aspnet/https:ro
+  shopping.client:
+    container_name: shoppingclient
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_HTTP_PORTS=8002
+      - APIConfig:BaseAddress=http://shoppingapi:8000
+    ports:
+      - "8002:8002"
+    depends_on:
+      - shopping.api
+      - shopping.db
+  shopping.db:
+    container_name: shoppingdb
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - ${WEBAPP_STORAGE_HOME}/site:/data/db  
+   
+

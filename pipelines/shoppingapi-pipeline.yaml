@@ -5,8 +5,8 @@ trigger:
             - main
         paths:
             include:
-                - Shopping/Shopping.API/*
-                - aks/shoppingapi.yaml
+            - Shopping/Shopping.API/*
+            - aks/shoppingapi.yaml
 
 resources:
 - repo: self

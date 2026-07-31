@@ -43,6 +43,13 @@ namespace Shopping.API.Data
                 Description="This phone is Biggest",
                 ImageFile="product-6.png",
                 Price=110.00m
+            },
+            new Product(){
+                Name="HP Pavilion",
+                Category="Home Laptop",
+                Description="This laptop is Biggest",
+                ImageFile="product-7.png",
+                Price=210.00m
             }
         };
     }

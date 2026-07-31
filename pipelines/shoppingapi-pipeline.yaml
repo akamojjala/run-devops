@@ -1,6 +1,12 @@
 # Deploy to Azure Kubernetes Service
 trigger:
-- main
+    branches:
+        include:
+            - main
+        paths:
+            include:
+                - Shopping/Shopping.API/*
+                - aks/shoppingapi.yaml
 
 resources:
 - repo: self
@@ -34,8 +40,8 @@ stages:
         tags: |
           $(tag)
 
-    - upload: manifests
-      artifact: manifests
+    - upload: aks
+      artifact: aks
 
 - stage: Deploy
   displayName: Deploy stage
@@ -63,7 +69,7 @@ stages:
             inputs:
               action: deploy
               manifests: |
-                $(Pipeline.Workspace)/manifests/shoppingapi.yml
+                $(Pipeline.Workspace)/aks/shoppingapi.yml
               imagePullSecrets: |
                 $(imagePullSecret)
               containers: |

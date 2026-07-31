@@ -1,12 +1,12 @@
 # Deploy to Azure Kubernetes Service
 trigger:
     branches:
-        include:
-            - main
-        paths:
-            include:
-            - Shopping/Shopping.API/*
-            - aks/shoppingapi.yaml
+      include:
+        - main
+    paths:
+      include:
+      - Shopping/Shopping.API/*
+      - aks/shoppingapi.yaml
 
 resources:
 - repo: self

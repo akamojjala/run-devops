@@ -2,7 +2,7 @@
 
 A reference guide covering everything done so far: containerizing **Shopping.Client** (frontend) and **Shopping.API** (.NET backend) with **MongoDB**, running them locally with Docker Compose, deploying to a local Kubernetes cluster, pushing images to Docker Hub and Azure Container Registry (ACR), and finally running the whole stack on Azure Kubernetes Service (AKS).
 
-> Azure DevOps Pipeline (CI/CD) support will be added in a future section.
+[![shoppingApi-pipeline](https://dev.azure.com/achuthakrrish/shopping/_apis/build/status%2FshoppingApi-pipeline?branchName=main)](https://dev.azure.com/achuthakrrish/shopping/_build/latest?definitionId=33&branchName=main) [![shoppingClient-Pipeline](https://dev.azure.com/achuthakrrish/shopping/_apis/build/status%2FshoppingClient-Pipeline?branchName=main)](https://dev.azure.com/achuthakrrish/shopping/_build/latest?definitionId=34&branchName=main)
 
 ---
 
@@ -16,9 +16,10 @@ A reference guide covering everything done so far: containerizing **Shopping.Cli
 6. [Part 5 — Azure Kubernetes Service (AKS)](#6-part-5--azure-kubernetes-service-aks)
 7. [Part 6 — Zero Downtime & Autoscaling](#7-part-6--zero-downtime--autoscaling)
 8. [Part 7 — Cost Management](#8-part-7--cost-management)
-9. [Command Cheat Sheet](#9-command-cheat-sheet)
-10. [Glossary](#10-glossary)
-11. [Troubleshooting Log](#11-troubleshooting-log-real-issues-we-hit)
+9. [Part 8 — CI/CD with Azure DevOps Pipelines](#9-part-8--cicd-with-azure-devops-pipelines)
+10. [Command Cheat Sheet](#10-command-cheat-sheet)
+11. [Glossary](#11-glossary)
+12. [Troubleshooting Log](#12-troubleshooting-log-real-issues-we-hit)
 
 ---
 
@@ -462,7 +463,204 @@ az group delete --name myResourceGroup --yes --no-wait
 
 ---
 
-## 9. Command Cheat Sheet
+## 9. Part 8 — CI/CD with Azure DevOps Pipelines
+
+Two pipelines — `shoppingApi-pipeline` and `shoppingClient-Pipeline` — one per app. Each triggers on every push to `main`, builds a Docker image, pushes it to ACR, and deploys it straight to AKS.
+
+```mermaid
+flowchart TD
+    Push["👨‍💻 git push to main"] --> Trigger["Pipeline triggers"]
+    Trigger --> Build
+
+    subgraph Build["🔵 Stage 1: Build — self-hosted agent"]
+        direction TB
+        B1["Docker build<br/>(dockerfilePath + buildContext)"]
+        B2["Push to ACR<br/>tagged $(Build.BuildId)"]
+        B3["Upload manifests folder<br/>as pipeline artifact"]
+        B1 --> B2 --> B3
+    end
+
+    Build --> Deploy
+
+    subgraph Deploy["🟢 Stage 2: Deploy — self-hosted agent"]
+        direction TB
+        D1["Create imagePullSecret in AKS"]
+        D2["kubectl apply manifests<br/>(image tag swapped in)"]
+        D1 --> D2
+    end
+
+    Deploy --> Result["☁️ New version running in AKS"]
+```
+
+### Why a self-hosted agent
+
+New Azure DevOps organizations no longer get free Microsoft-hosted parallel jobs automatically (Microsoft restricted this after crypto-mining abuse of the free tier). You'll likely hit:
+
+```
+##[error]No hosted parallelism has been purchased or granted.
+```
+
+Two ways out: request the free grant at [aka.ms/azpipelines-parallelism-request](https://aka.ms/azpipelines-parallelism-request) (a manual review, usually a few business days), or run your own **self-hosted agent** — free, works immediately, since it just uses your own machine.
+
+### Setting up a self-hosted agent
+
+1. Azure DevOps → Project Settings → Agent Pools → **Default** pool → New Agent
+2. Download the package it gives you, then register and start it:
+
+```powershell
+cd C:\agents
+.\config.cmd     # one-time registration — links this machine to the pool
+.\run.cmd        # starts listening for jobs — keep this terminal open while pipelines run
+```
+
+Docker Desktop must also be running on this machine, since the agent builds images using your local Docker installation, not a cloud VM.
+
+### Build stage — the same build-context bug, now inside CI
+
+```yaml
+- task: Docker@2
+  displayName: Build and push an image to container registry
+  inputs:
+    command: buildAndPush
+    repository: $(imageRepository)
+    dockerfile: $(dockerfilePath)
+    buildContext: $(Build.SourcesDirectory)/Shopping   # don't forget this
+    containerRegistry: $(dockerRegistryServiceConnection)
+    tags: |
+      $(tag)
+```
+
+`Docker@2` defaults its build context to the **Dockerfile's own folder** unless `buildContext` is set explicitly — the exact same class of bug from [Part 1](#2-part-1--dockerizing-the-apps), just resurfacing inside a pipeline. If you see:
+
+```
+COPY ["Shopping.API/Shopping.API.csproj", "Shopping.API/"]
+ERROR: ... "/Shopping.API/Shopping.API.csproj": not found
+```
+
+this is the fix — point `buildContext` at the solution root, same as the local `docker build -f ... .` fix.
+
+### Deploy stage
+
+```yaml
+- stage: Deploy
+  displayName: Deploy stage
+  dependsOn: Build
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    pool:
+      name: Default          # same self-hosted pool — a hosted vmImage here hits the parallelism error too
+    environment: 'shopping.default'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: KubernetesManifest@0
+            displayName: Create imagePullSecret
+            inputs:
+              action: createSecret
+              secretName: $(imagePullSecret)
+              dockerRegistryEndpoint: $(dockerRegistryServiceConnection)
+
+          - task: KubernetesManifest@0
+            displayName: Deploy to Kubernetes cluster
+            inputs:
+              action: deploy
+              manifests: |
+                $(Pipeline.Workspace)/manifests/deployment.yml
+                $(Pipeline.Workspace)/manifests/service.yml
+              imagePullSecrets: |
+                $(imagePullSecret)
+              containers: |
+                $(containerRegistry)/$(imageRepository):$(tag)
+```
+
+What each piece does:
+
+- **`createSecret`** — creates a fresh `imagePullSecret` inside the cluster so AKS is allowed to pull from your private ACR. This is an alternative to the `--attach-acr` managed-identity approach from Part 5 — only need one, this one's portable to any cluster/registry combo.
+- **`manifests:`** — the two YAML files uploaded as an artifact back in the Build stage.
+- **`containers:`** — tells the task which image reference inside those manifests to swap the tag on, so every deploy uses *this exact build's* image, never a stale `:latest`.
+- **`environment:`** — must already exist in Azure DevOps (Pipelines → Environments) with a Kubernetes resource linked to your AKS namespace, usually created automatically if you went through the "Deploy to Azure Kubernetes Service" pipeline wizard.
+
+### Full pipeline (Build + Deploy)
+
+```yaml
+trigger:
+- main
+
+resources:
+- repo: self
+
+variables:
+  dockerRegistryServiceConnection: '<your-service-connection-id>'
+  imageRepository: 'shoppingapi'
+  containerRegistry: 'shoppingacr.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/Shopping/Shopping.API/Dockerfile'
+  buildContext: '$(Build.SourcesDirectory)/Shopping'
+  tag: '$(Build.BuildId)'
+  imagePullSecret: 'shoppingacr-auth'
+
+stages:
+- stage: Build
+  displayName: Build stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      name: Default
+    steps:
+    - task: Docker@2
+      displayName: Build and push an image to container registry
+      inputs:
+        command: buildAndPush
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        buildContext: $(buildContext)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+
+    - upload: manifests
+      artifact: manifests
+
+- stage: Deploy
+  displayName: Deploy stage
+  dependsOn: Build
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    pool:
+      name: Default
+    environment: 'shopping.default'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: KubernetesManifest@0
+            displayName: Create imagePullSecret
+            inputs:
+              action: createSecret
+              secretName: $(imagePullSecret)
+              dockerRegistryEndpoint: $(dockerRegistryServiceConnection)
+
+          - task: KubernetesManifest@0
+            displayName: Deploy to Kubernetes cluster
+            inputs:
+              action: deploy
+              manifests: |
+                $(Pipeline.Workspace)/manifests/deployment.yml
+                $(Pipeline.Workspace)/manifests/service.yml
+              imagePullSecrets: |
+                $(imagePullSecret)
+              containers: |
+                $(containerRegistry)/$(imageRepository):$(tag)
+```
+
+> `shoppingClient-Pipeline` follows the identical structure — just pointing `dockerfilePath`/`imageRepository` at `Shopping.Client` and its own `deployment.yml`/`service.yml`.
+
+---
+
+## 10. Command Cheat Sheet
 
 | Task | Command |
 |---|---|
@@ -481,10 +679,13 @@ az group delete --name myResourceGroup --yes --no-wait
 | Create AKS cluster | `az aks create -g <rg> -n <name> --tier free --attach-acr <acr>` |
 | Point kubectl at AKS | `az aks get-credentials -g <rg> -n <name>` |
 | Stop/start AKS (save cost) | `az aks stop` / `az aks start -g <rg> -n <name>` |
+| Register a resource provider | `az provider register --namespace <namespace>` |
+| Start a self-hosted agent | `.\config.cmd` then `.\run.cmd` (from the agent folder) |
+| Check current kubectl cluster | `kubectl config current-context` |
 
 ---
 
-## 10. Glossary
+## 11. Glossary
 
 | Term | Plain-English definition |
 |---|---|
@@ -511,10 +712,17 @@ az group delete --name myResourceGroup --yes --no-wait
 | **ACR** | Azure Container Registry — Microsoft's private image registry service. |
 | **AKS** | Azure Kubernetes Service — Microsoft's managed Kubernetes offering. |
 | **Managed Identity** | An Azure AD identity automatically assigned to a resource (like AKS), used to authenticate to other Azure services without manual credentials. |
+| **CI/CD** | Continuous Integration / Continuous Deployment — automatically building and shipping code on every push, instead of doing it by hand. |
+| **Pipeline** | A defined sequence of automated steps (build, test, deploy) that runs on every trigger, e.g. a `git push`. |
+| **Self-hosted agent** | A machine you provide yourself to run pipeline jobs, instead of Microsoft's cloud-hosted VMs. |
+| **Service Connection** | A stored, authenticated link from Azure DevOps to an external service (like ACR), so pipelines don't need hardcoded credentials. |
+| **Build Context** | The folder Docker treats as the root when building — everything the Dockerfile can `COPY` from. A mismatched context is the single most common Docker build failure in this whole project. |
+| **Pipeline Artifact** | A file or folder produced in one pipeline stage and handed off to a later stage (e.g. manifests passed from Build to Deploy). |
+| **Environment** (Azure DevOps) | A named deployment target (e.g. an AKS namespace) that a Deploy stage is tied to, with its own approval/history tracking. |
 
 ---
 
-## 11. Troubleshooting Log (real issues we hit)
+## 12. Troubleshooting Log (real issues we hit)
 
 A record of actual bugs hit during this build-out, for quick pattern-matching next time something looks similar.
 
@@ -532,3 +740,7 @@ A record of actual bugs hit during this build-out, for quick pattern-matching ne
 | `kubectl exec ... -it sh` syntax error | Newer kubectl requires `--` before the command | `kubectl exec -it <pod> -- sh` |
 | `imagePullSecrets` YAML rejected | Placed inside the container block instead of the Pod spec | Move it to be a sibling of `containers:`, not nested inside one |
 | ConfigMap value not taking effect | Wrong Service/ConfigMap name referenced (case-sensitive) | Double-check exact names with `kubectl get configmap` / `kubectl get svc` |
+| `No hosted parallelism has been purchased or granted` | New Azure DevOps org has no free Microsoft-hosted parallel jobs by default | Request the free grant, or run a self-hosted agent instead |
+| Same `.csproj not found` COPY error, but inside a pipeline this time | `Docker@2` defaults build context to the Dockerfile's own folder | Add `buildContext: $(Build.SourcesDirectory)/Shopping` explicitly |
+| Deploy stage queues forever / hits the parallelism error too | Deploy job still targeting `vmImage` (Microsoft-hosted pool) | Change to `pool: name: Default` to match the Build stage's self-hosted agent |
+| `kubectl get pod` shows "No resources found" after a deploy | Wrong kubectl context active locally — not necessarily a deploy failure | `kubectl config current-context`, switch or re-pull credentials for `shoppingaks` |
